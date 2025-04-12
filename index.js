@@ -5,26 +5,23 @@ const mongoose = require("mongoose");
 const Testimonial = require("./models/Testimonial");
 const multer = require("multer");
 const path = require("path");
-const fs = require("fs");
+const cloudinary = require("cloudinary").v2;
 
 dotenv.config();
 const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use("/uploads", express.static("uploads"));
 
-const PORT = process.env.PORT || 8000;
 const DATABASE_URL = process.env.DATABASE_URL;
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, "uploads/");
-  },
-  filename: (req, file, cb) => {
-    cb(null, Date.now() + path.extname(file.originalname));
-  },
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
 });
+
+const storage = multer.memoryStorage();
 
 const upload = multer({
   storage,
@@ -42,38 +39,55 @@ const upload = multer({
   },
 });
 
-if (!fs.existsSync("uploads")) {
-  fs.mkdirSync("uploads");
+let cachedDb = null;
+async function connectToDatabase() {
+  if (cachedDb) {
+    return cachedDb;
+  }
+  const db = await mongoose.connect(DATABASE_URL, {
+    useNewUrlParser: true,
+    useUnifiedTopology: true,
+  });
+  cachedDb = db;
+  console.log("Database connection established");
+  return db;
 }
 
-mongoose
-  .connect(DATABASE_URL)
-  .then(() => {
-    console.log("Database connection established");
-  })
-  .catch((err) => {
-    console.log(err);
-  });
+app.use(async (req, res, next) => {
+  await connectToDatabase();
+  next();
+});
 
 app.post("/api/testimonial", upload.single("image"), async (req, res) => {
   const { name, job_title, company, testimonial } = req.body;
-  const image_path = req.file ? req.file.path : null;
-
-  console.log(req.file);
-  console.log(image_path);
-  console.log(req.body);
-
+  const image = req.file;
   try {
+    let image_url = null;
+    if (image) {
+      const result = await new Promise((resolve, reject) => {
+        const uploadStream = cloudinary.uploader.upload_stream(
+          { resource_type: "image" },
+          (error, result) => {
+            if (error) return reject(error);
+            resolve(result);
+          }
+        );
+        uploadStream.end(image.buffer);
+      });
+      image_url = result.secure_url;
+    }
+
     const newTestimonial = new Testimonial({
       name,
       job_title,
       company,
       testimonial,
-      image: `${req.protocol}://${req.get("host")}/${image_path}`,
+      image: image_url,
     });
     await newTestimonial.save();
     res.status(201).json({ message: "Thank you for your testimonial!" });
   } catch (error) {
+    console.error("Error:", error);
     res
       .status(500)
       .json({ message: "There was an error saving your testimonial." });
@@ -100,6 +114,5 @@ app.use((err, req, res, next) => {
   console.error(err);
   res.status(500).json({ message: "Internal Server Error" });
 });
-app.listen(PORT, () => {
-  console.log(`server is running on http://localhost:${PORT}`);
-});
+
+module.exports = app;
