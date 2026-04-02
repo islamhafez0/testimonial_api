@@ -45,8 +45,8 @@ async function connectToDatabase() {
     return cachedDb;
   }
   const db = await mongoose.connect(DATABASE_URL, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
+    serverSelectionTimeoutMS: 5000,
+    connectTimeoutMS: 10000,
   });
   cachedDb = db;
   console.log("Database connection established");
